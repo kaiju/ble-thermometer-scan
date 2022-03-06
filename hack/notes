@@ -1,0 +1,7 @@
+A4:C1:38:33:A3:AC (ATC_33A3AC)
+13 byte 0x181a payload: 22.8 53 84 2956 16
+18 byte 0xfe95 payload: 50305b050faca33338c1a40d1004e4001402
+
+maybe ble mibeacon v5?
+
+50 30 5b 05 0f [ac a3 33 38 c1 a4]

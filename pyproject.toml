@@ -1,0 +1,22 @@
+[tool.poetry]
+name = "ble-thermometer-scan"
+version = "0.1.0"
+description = "Scan for Xaoimi Mijia BLE devices and publish to MQTT"
+authors = ["Josh <josh@kaiju.net>"]
+packages = [
+  { include = "scanner.py", from = "src" },
+]
+
+[tool.poetry.scripts]
+ble-thermometer-scan = "scanner:start"
+
+[tool.poetry.dependencies]
+python = "^3.9"
+asyncio-mqtt = "^0.12.1"
+bleak = "^0.14.2"
+
+[tool.poetry.dev-dependencies]
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"

@@ -133,6 +133,9 @@ async def main():
             await client.publish(f'{base_topic}/batterymV', payload=m.payload.batterymV)
             await client.publish(f'{base_topic}/batteryLevel', payload=m.payload.batteryLevel)
             
+def start():
+    asyncio.run(main())
 
-asyncio.run(main())
+if __name__ == "__main__":
+    start()
 
