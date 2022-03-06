@@ -21,8 +21,8 @@
         };
 
       in rec {
-        packages.ble-thermometer-scanner = app;
-        defaultPackage = packages.ble-thermometer-scanner;
+        packages.ble-thermometer-scan = app;
+        defaultPackage = packages.ble-thermometer-scan;
         devShell = pkgs.mkShell {
           buildInputs = [ pkgs.poetry ];
           inputsFrom = builtins.attrValues self.packages.${system};
@@ -31,7 +31,7 @@
     )
   ) // {
 
-    overlay = (final: prev: { ble-thermometer-scanner = self.packages.${prev.system}.ble-thermometer-scanner; });
+    overlay = (final: prev: { ble-thermometer-scan = self.packages.${prev.system}.ble-thermometer-scan; });
 
   };
 
