@@ -31,6 +31,8 @@
     )
   ) // {
 
+    ble-thermometer-scanner = (final: prev: { ble-thermometer-scanner = self.packages.${prev.system}.ble-thermometer-scanner; });
+
   };
 
 }
