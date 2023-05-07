@@ -3,37 +3,160 @@ import struct
 import sys
 import json
 import os
+import structlog
+import sys
+import logging
 from bleak import BleakScanner
 from asyncio_mqtt import Client, ProtocolVersion
 
-class MQTTPayload():
-    def __init__(self, advertisement_data, payload):
-        self.advertisement_data = advertisement_data
-        self.payload = payload
+structlog.configure(
+    wrapper_class=structlog.make_filtering_bound_logger(logging.INFO)
+)
+logger = structlog.get_logger(__name__)
+
+
+class subscription:
+    def __init__(self):
+        self.queue = asyncio.Queue()
+
+    def get(self):
+        return self.queue.get()
+
+    async def consume(self, callback, args=[], kwargs={}):
+        while True:
+            callback(await self.queue.get(), *args, **kwargs)
+
+
+class topic:
+    def __init__(self, name: str):
+        self.name = name
+        self.subscribers = []
+
+    async def publish(self, message):
+        """publish a message to this topic"""
+        for subscriber in self.subscribers:
+            await subscriber.queue.put(message)
+
+    def subscribe(self) -> subscription:
+        """return a subscription"""
+        sub = subscription()
+        self.subscribers.append(sub)
+        return sub
+
+
+# Tasks
+async def ble_scanner(topic):
+    """scan for ble advertisements and unpack the data"""
+
+    structlog.contextvars.bind_contextvars(task=asyncio.current_task().get_name())
+
+    stop = asyncio.Event()
+    args = {
+        "filters": {
+            #'UUIDs': ['0000181a-0000-1000-8000-00805f9b34fb'],
+            "Pattern": "A4:C1:38",
+        }
+    }
+
+    logger.info("Starting BLE scan")
+    async with BleakScanner(
+        detection_callback=publish_data(topic), bluez=args
+    ) as scanner:
+        await stop.wait()
+
+
+async def mqtt_publisher(hostname: str, topic: topic):
+    """connect to a mqtt server and publish received messages"""
+
+    structlog.contextvars.bind_contextvars(
+        hostname=hostname, task=asyncio.current_task().get_name()
+    )
+    subscription = topic.subscribe()
+
+    logger.info("Connecting to MQTT")
+    async with Client(hostname) as client:
+        while True:
+            message = await subscription.get()
+            logger.debug("Publishing message")
+            base_topic = f"LYWSD03MMC/{os.uname().nodename}/{message.local_name}"
+            asyncio.gather(
+                client.publish(f"{base_topic}/events", payload=message.json()),
+                client.publish(
+                    f"{base_topic}/temperatureC", payload=message.data.temperatureC
+                ),
+                client.publish(f"{base_topic}/humidity", payload=message.data.humidity),
+                client.publish(
+                    f"{base_topic}/batterymV", payload=message.data.batterymV
+                ),
+                client.publish(
+                    f"{base_topic}/batteryLevel", payload=message.data.batteryLevel
+                ),
+            )
+
+
+def publish_data(topic):
+    """return a callback function that unpacks ble advertisement data and publish"""
+
+    async def callback(device, advertisement_data):
+        try:
+            data = AdvertisementData(advertisement_data)
+            logger.debug("Got data", data=str(data))
+        except UnknownFormatException:
+            logger.error("Unknown format")
+            return
+
+        logger.debug("Publish to topic", topic=topic.name)
+        await topic.publish(data)
+
+    return callback
+
+
+class UnknownFormatException(Exception):
+    pass
+
+
+class AdvertisementData:
+    def __init__(self, advertisement_data):
+        service_data = advertisement_data.service_data.get(
+            "0000181a-0000-1000-8000-00805f9b34fb", None
+        )
+
+        if service_data and len(service_data) == 15:
+            data_format = PvvxFormat
+        elif service_data and len(service_data) == 13:
+            data_format = Atc1441Format
+        else:
+            raise UnknownFormatException()
+
+        self.local_name = advertisement_data.local_name
+        self.data = data_format(service_data)
 
     def __str__(self):
-        return "{} {}".format(self.advertisement_data, self.payload)
+        return "{} {}".format(self.local_name, self.data)
 
-    # todo, add hostname as 'listener'
     def json(self):
-        return json.dumps({
-            "local_name": self.advertisement_data.local_name,
-            "payload_format": self.payload.format,
-            "address": self.payload.address.upper(),
-            "temperatureC": self.payload.temperatureC,
-            "humidity": self.payload.humidity,
-            "batterymV": self.payload.batterymV,
-            "batteryLevel": self.payload.batteryLevel
-            })
+        return json.dumps(
+            {
+                "local_name": self.local_name,
+                "payload_format": self.data.format,
+                "address": self.data.address.upper(),
+                "temperatureC": self.data.temperatureC,
+                "humidity": self.data.humidity,
+                "batterymV": self.data.batterymV,
+                "batteryLevel": self.data.batteryLevel,
+            }
+        )
 
-class PayloadFormat():
+
+class PayloadFormat:
     def __str__(self):
-        return f'Format {self.format}, {self.address.upper()}: {self.temperatureC}c, {self.humidity}% humidity, {self.batterymV}mV, {self.batteryLevel}% battery'
+        return f"Format {self.format}, {self.address.upper()}: {self.temperatureC}c, {self.humidity}% humidity, {self.batterymV}mV, {self.batteryLevel}% battery"
+
 
 class PvvxFormat(PayloadFormat):
     def __init__(self, payload):
         self.payload = payload
-        self.format = 'pvvx'
+        self.format = "pvvx"
 
     @property
     def address(self):
@@ -41,29 +164,29 @@ class PvvxFormat(PayloadFormat):
 
     @property
     def temperatureC(self):
-        return struct.unpack('h', self.payload[6:8])[0] * 0.01
+        return struct.unpack("h", self.payload[6:8])[0] * 0.01
 
     @property
     def humidity(self):
-        return struct.unpack('H', self.payload[8:10])[0] * 0.01
+        return struct.unpack("H", self.payload[8:10])[0] * 0.01
 
     @property
     def batterymV(self):
-        return struct.unpack('H', self.payload[10:12])[0]
+        return struct.unpack("H", self.payload[10:12])[0]
 
     @property
     def batteryLevel(self):
-        return struct.unpack('B', self.payload[12:13])[0]
+        return struct.unpack("B", self.payload[12:13])[0]
 
     @property
     def counter(self):
-        return struct.unpack('B', self.payload[13:14])[0]
+        return struct.unpack("B", self.payload[13:14])[0]
 
 
 class Atc1441Format(PayloadFormat):
     def __init__(self, payload):
         self.payload = payload
-        self.format = 'atc1441'
+        self.format = "atc1441"
 
     @property
     def address(self):
@@ -71,71 +194,41 @@ class Atc1441Format(PayloadFormat):
 
     @property
     def temperatureC(self):
-        return struct.unpack('>h', self.payload[6:8])[0] / 10
+        return struct.unpack(">h", self.payload[6:8])[0] / 10
 
     @property
     def humidity(self):
-        return struct.unpack('B', self.payload[8:9])[0]
+        return struct.unpack("B", self.payload[8:9])[0]
 
     @property
     def batterymV(self):
-        return struct.unpack('>H', self.payload[10:12])[0]
+        return struct.unpack(">H", self.payload[10:12])[0]
 
     @property
     def batteryLevel(self):
-        return struct.unpack('B', self.payload[9:10])[0]
+        return struct.unpack("B", self.payload[9:10])[0]
 
     @property
     def counter(self):
-        return struct.unpack('B', payload[12:13])[0]
+        return struct.unpack("B", payload[12:13])[0]
 
-
-def device_detection_callback(device, advertisement_data, messages):
-
-    if device.address.startswith("A4:C1:38"):
-
-        # TODO -- see about decoding xaomi (0xfe95) payloads and if they have anything interesting
-        payload = advertisement_data.service_data.get('0000181a-0000-1000-8000-00805f9b34fb', None)
-
-        if payload and len(payload) == 15: # pvvx format
-            payload_format = PvvxFormat 
-        elif payload and len(payload) == 13: # atc1441 format
-            payload_format = Atc1441Format
-        else:
-           return 
-
-        async def publish():
-            await messages.put(MQTTPayload(advertisement_data, payload_format(payload)))
-
-        asyncio.create_task(publish())
 
 async def main():
+    mqtt_servers = sys.argv[1:]
+    if len(mqtt_servers) < 1:
+        logger.error("No servers given")
 
-    messages = asyncio.Queue()
+    measurements = topic("measurements")
 
-    def discovery_wrapper(device, advertisement_data):
-      device_detection_callback(device, advertisement_data, messages)
+    tasks = [
+        ble_scanner(measurements),
+    ]
 
-    mqtt_client = Client("mqtt.mast.haus", protocol=ProtocolVersion.V31)
-    scanner = BleakScanner()
-    scanner.register_detection_callback(discovery_wrapper)
-    await scanner.start()
+    for mqtt_server in mqtt_servers:
+        tasks.append(mqtt_publisher(mqtt_server, measurements))
 
-    # TODO make mqtt configurable
-    async with Client("mqtt.mast.haus") as client:
-        while True:
-            m = await messages.get()
-            base_topic = f'LYWSD03MMC/{os.uname().nodename}/{m.advertisement_data.local_name}'
-            await client.publish(f'{base_topic}/events', payload=m.json())
-            await client.publish(f'{base_topic}/temperatureC',
-                    payload=m.payload.temperatureC)
-            await client.publish(f'{base_topic}/humidity', payload=m.payload.humidity)
-            await client.publish(f'{base_topic}/batterymV', payload=m.payload.batterymV)
-            await client.publish(f'{base_topic}/batteryLevel', payload=m.payload.batteryLevel)
-            
-def start():
-    asyncio.run(main())
+    await asyncio.gather(*tasks)
+
 
 if __name__ == "__main__":
-    start()
-
+    asyncio.run(main())

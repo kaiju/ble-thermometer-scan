@@ -13,7 +13,8 @@ ble-thermometer-scan = "scanner:start"
 [tool.poetry.dependencies]
 python = "^3.9"
 asyncio-mqtt = "^0.12.1"
-bleak = "^0.14.2"
+bleak = "^0.20.2"
+structlog = "^23.1.0"
 
 [tool.poetry.dev-dependencies]
 
