@@ -4,14 +4,11 @@ import sys
 import json
 import os
 import structlog
-import sys
 import logging
 from bleak import BleakScanner
-from asyncio_mqtt import Client, ProtocolVersion
+from aiomqtt import Client
 
-structlog.configure(
-    wrapper_class=structlog.make_filtering_bound_logger(logging.INFO)
-)
+structlog.configure(wrapper_class=structlog.make_filtering_bound_logger(logging.INFO))
 logger = structlog.get_logger(__name__)
 
 
@@ -59,9 +56,7 @@ async def ble_scanner(topic):
     }
 
     logger.info("Starting BLE scan")
-    async with BleakScanner(
-        detection_callback=publish_data(topic), bluez=args
-    ) as scanner:
+    async with BleakScanner(detection_callback=publish_data(topic), bluez=args) as _:
         await stop.wait()
 
 
@@ -210,7 +205,7 @@ class Atc1441Format(PayloadFormat):
 
     @property
     def counter(self):
-        return struct.unpack("B", payload[12:13])[0]
+        return struct.unpack("B", self.payload[12:13])[0]
 
 
 async def main():
@@ -229,9 +224,11 @@ async def main():
 
     await asyncio.gather(*tasks)
 
+
 def start():
-    """ script entrypoint """
+    """script entrypoint"""
     asyncio.run(main())
+
 
 if __name__ == "__main__":
     start()
