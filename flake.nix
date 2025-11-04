@@ -65,9 +65,10 @@
             virtualenv = editablePythonset.mkVirtualEnv "ble-thermometer-scan-dev-env" workspace.deps.all;
           in
           pkgs.mkShell {
-            packages = [
+            packages = with pkgs; [
               virtualenv
-              pkgs.uv
+              uv
+              ruff
             ];
 
             env = {
